@@ -1,0 +1,250 @@
+<?php
+/**
+ * @file
+ * Code for the home_photon feature.
+ */
+
+include_once 'home_photon.features.inc';
+
+/**
+ * Implements hook_init().
+ */
+function home_photon_init() {
+//  home_photon_cron();
+}
+
+/**
+ * Implements hook_block_info().
+ */
+function home_photon_block_info() {
+  $blocks = array();
+
+  $blocks['home_photon_remote'] = array(
+    'info' => t('Photon remote'),
+    'cache' => DRUPAL_CACHE_PER_USER,
+  );
+
+  return $blocks;
+}
+
+/**
+ * Implements hook_block_view().
+ */
+function home_photon_block_view($delta = '') {
+  $block = array();
+
+  switch ($delta) {
+    case 'home_photon_remote':
+      $block['subject'] = t('Photon remote');
+      $block['content'] = home_photon_remote_content();
+    break;
+  }
+
+  return $block;
+}
+
+/**
+ * ToDo.
+ */
+function home_photon_remote_content() {
+  return drupal_get_form('home_photon_remote_form');
+}
+
+/**
+ * ToDo.
+ */
+function home_photon_remote_form($form, &$form_state) {
+  $form['current_temp'] = array(
+    '#title' => 'Current threshold',
+    '#type' => 'item',
+    '#markup' => variable_get('home_photon_temp', 23),
+  );
+  $form['set_temp'] = array(
+    '#title' => 'Set temp',
+    '#type' => 'textfield',
+    '#default_value' => variable_get('home_photon_temp', 23),
+    '#size' => 15,
+  );
+  $form['set_temp_button'] = array(
+    '#value' => 'Set temp',
+    '#type' => 'submit',
+  );
+
+  if (variable_get('home_photon_offline', 'off') == 'off') {
+    // Thermostat is working ONLINE.
+    $form['offline_on'] = array(
+      '#value' => 'Enable offline mode',
+      '#type' => 'submit',
+    );
+  }
+  else {
+    // Thermostat is working OFFLINE.
+    $form['offline_off'] = array(
+      '#value' => 'Disable offline mode',
+      '#type' => 'submit',
+    );
+  }
+
+  $form['heater_on'] = array(
+    '#value' => 'Enable heater',
+    '#type' => 'submit',
+  );
+  $form['heater_off'] = array(
+    '#value' => 'Disable heater',
+    '#type' => 'submit',
+  );
+
+  return $form;
+}
+
+/**
+ * Validate callback for Foo.
+ */
+function home_photon_remote_form_validate(&$form, &$form_state) {
+  if (!user_access('administer content')) {
+    form_set_error('set_temp', t('No permissions'));
+  }
+}
+
+/**
+ * Submit callback for Foo.
+ */
+function home_photon_remote_form_submit(&$form, &$form_state) {
+  switch ($form_state['clicked_button']['#id']) {
+    case 'edit-set-temp-button':
+      variable_set('home_photon_temp', $form_state['values']['set_temp']);
+      drupal_set_message(t('New thermostat value: @temp.', array('@temp' => $form_state['values']['set_temp'])), 'status');
+      break;
+    case 'edit-offline-on':
+      home_photon_auth_call('setHeater', 'offlinemode_on');
+      variable_set('home_photon_offline', 'on');
+      drupal_set_message(t('Thermostat is working offline.'), 'warning');
+      break;
+    case 'edit-offline-off':
+    case 'edit-heater-on':
+    case 'edit-heater-off':
+      home_photon_auth_call('setHeater', 'offlinemode_off');
+      variable_set('home_photon_offline', 'off');
+      drupal_set_message(t('Thermostat is working online.'), 'status');
+      break;
+  }
+
+  switch ($form_state['clicked_button']['#id']) {
+    case 'edit-heater-on':
+      home_photon_auth_call('setHeater', 'on');
+      drupal_set_message(t('Heater is ON.'), 'status');
+      break;
+    case 'edit-heater-off':
+      home_photon_auth_call('setHeater', 'off');
+      drupal_set_message(t('Heater is OFF.'), 'status');
+      break;
+  }
+}
+
+/**
+ * Implements hook_cron().
+ */
+function home_photon_cron() {
+  $tempcelcius = home_photon_save_measurement();
+  if ($tempcelcius != NULL) {
+    home_photon_evaluate_state($tempcelcius);
+  }
+}
+
+
+/**
+ * ToDo.
+ */
+function home_photon_auth_call($endpoint, $arg) {
+  $device = variable_get('home_photon_device', '');
+  $token = variable_get('home_photon_token', '');
+
+  return home_photon_call($device, $endpoint, $token, $arg);
+}
+
+/**
+ * ToDo.
+ */
+function home_photon_call($device, $endpoint, $token, $arg) {
+  $url = 'https://api.particle.io/v1/devices/' . $device . '/' . $endpoint;
+  $data = array(
+    'access_token' => $token,
+    'args' => $arg,
+  );
+  $options = array(
+    'method' => 'POST',
+    'data' => http_build_query($data),
+    'headers' => array('Content-Type' => 'application/x-www-form-urlencoded'),
+  );
+
+  $response = drupal_http_request($url, $options);
+
+  if ($response->code == 200) {
+    drupal_set_message(t('API call @endpoint: @arg was successfull.', array('@endpoint' => $endpoint, '@arg' => $arg)), 'status');
+  } else {
+    drupal_set_message(t('API call @endpoint: @arg was unsuccessfull. You should implement logging now... ;-)', array('@endpoint' => $endpoint, '@arg' => $arg)), 'error');
+  }
+
+  return $response;
+}
+
+/**
+ * ToDo.
+ */
+function home_photon_value_from_response($response) {
+  if ($response->code == 200) {
+    $value = json_decode($response->data);
+    $value = $value->return_value;
+    return $value;
+  }
+  return NULL;
+}
+
+/**
+ * ToDo.
+ */
+function home_photon_save_measurement() {
+  // Create an Entity.
+  $node = entity_create('node', array('type' => 'measurement'));
+
+  // Specify the author.
+  $node->uid = 1;
+
+  // Create a Entity Wrapper of that new Entity.
+  $emw_node = entity_metadata_wrapper('node', $node);
+
+  // Set a title and some text field value.
+  $emw_node->title = 'Measurement ' . time();
+
+  $humidity = home_photon_auth_call('dth1_measure', 'getHumidity');
+  $humidity = home_photon_value_from_response($humidity);
+  if ($humidity != NULL) {
+    $emw_node->field_humidity = ($humidity / 100);
+  }
+
+  $tempcelcius = home_photon_auth_call('dth1_measure', 'getTempCelcius');
+  $tempcelcius = home_photon_value_from_response($tempcelcius);
+  if ($tempcelcius != NULL) {
+    $emw_node->field_tempcelcius = ($tempcelcius / 100);
+  }
+  // And save it.
+  $emw_node->save();
+
+  return ($tempcelcius / 100);
+}
+
+/**
+ * ToDo.
+ */
+function home_photon_evaluate_state($tempcelcius) {
+  // Prevet updates (which set online mode) when thermostat is set to offline mode.
+  if (variable_get('home_photon_offline', 'off') == 'on') {
+    return;
+  }
+
+  if (variable_get('home_photon_temp', 23) < $tempcelcius) {
+    home_photon_auth_call('setHeater', 'on');
+  } else {
+    home_photon_auth_call('setHeater', 'off');
+  }
+}
