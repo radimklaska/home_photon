@@ -13,7 +13,7 @@ unsigned long lastComms = millis();
 DHT dht(DHTPIN, DHTTYPE);
 
 #define THERMOSTAT_THRESHOLD 22
-
+    
 boolean offlinemode = false;
 
 void setup()
@@ -23,10 +23,10 @@ void setup()
     Particle.function("dth1_measure", dth1_measure);
 
     dht.begin();
-
+    
     pinMode(LEDPIN, OUTPUT);
     pinMode(RELAYPIN, OUTPUT);
-    digitalWrite(LEDPIN, HIGH);
+    digitalWrite(LEDPIN, LOW);
     digitalWrite(RELAYPIN, LOW);
 }
 
@@ -37,7 +37,7 @@ void loop()
         // Request time synchronization from the Particle Cloud
         Particle.syncTime();
     }
-
+    
     // Fallback to offline mode.
     // Work as regular thermostat when offline
     // if (millis() - lastComms > (10 * 1000) || offlinemode == true) {
